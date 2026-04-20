@@ -4,14 +4,12 @@ import express from "express";
 import mongoose from "mongoose";
 import path from "path";
 
-import { connectDatabase } from "./config/db.js";
 import { requireAuth } from "./middleware/auth.js";
 import { Customer } from "./models/Customer.js";
 import { Measurement } from "./models/Measurement.js";
 import { Order } from "./models/Order.js";
 import { Payment } from "./models/Payment.js";
 import { User } from "./models/User.js";
-import { seedDatabase } from "./data/seed.js";
 import { clearToken, createToken, resolveToken } from "./utils/auth.js";
 
 const app = express();
@@ -56,6 +54,7 @@ async function buildOrderView(order) {
 
 // ================= ROUTES =================
 
+// Health check
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
@@ -103,68 +102,10 @@ app.post("/api/auth/logout", requireAuth, (req, res) => {
   res.json({ message: "Logged out" });
 });
 
-// DASHBOARD
-app.get("/api/dashboard", requireAuth, async (req, res) => {
-  const search = String(req.query.search || "").trim();
-
-  const filter = search
-    ? {
-        $or: [
-          { fullName: { $regex: search, $options: "i" } },
-          { phone: { $regex: search, $options: "i" } },
-          { address: { $regex: search, $options: "i" } },
-        ],
-      }
-    : {};
-
-  const [customers, orders, payments] = await Promise.all([
-    Customer.find(filter).sort({ fullName: 1 }).lean(),
-    Order.find({}).sort({ deliveryDate: 1, createdAt: -1 }).lean(),
-    Payment.find({}).lean(),
-  ]);
-
-  const orderCounts = orders.reduce((map, order) => {
-    map[String(order.customerId)] =
-      (map[String(order.customerId)] || 0) + 1;
-    return map;
-  }, {});
-
-  const customersWithCounts = customers.map((customer) => ({
-    ...customer,
-    orderCount: orderCounts[String(customer._id)] || 0,
-  }));
-
-  const customerMap = new Map(
-    customers.map((c) => [String(c._id), c.fullName])
-  );
-
-  const upcomingOrders = orders.slice(0, 8).map((order) => ({
-    ...order,
-    customerName:
-      customerMap.get(String(order.customerId)) || "Unknown",
-  }));
-
-  const stats = {
-    totalCustomers: await Customer.countDocuments(),
-    totalOrders: orders.length,
-    pendingOrders: orders.filter((o) => o.status === "Pending").length,
-    inProgressOrders: orders.filter((o) => o.status === "In Progress").length,
-    completedOrders: orders.filter((o) => o.status === "Completed").length,
-    deliveredOrders: orders.filter((o) => o.status === "Delivered").length,
-    collectedRevenue: payments.reduce(
-      (sum, p) => sum + Number(p.amount),
-      0
-    ),
-  };
-
-  res.json({ stats, customers: customersWithCounts, upcomingOrders });
-});
-
 // ================= SERVER START =================
 
 async function start() {
   try {
-    // ✅ Connect DB
     const uri = process.env.MONGODB_URI;
 
     if (!uri) throw new Error("MONGODB_URI not found");
@@ -172,10 +113,7 @@ async function start() {
     await mongoose.connect(uri);
     console.log("MongoDB Connected ✅");
 
-    // Optional seed
-    await seedDatabase();
-
-    // ✅ Serve frontend
+    // Serve frontend
     const __dirname = path.resolve();
     app.use(express.static(path.join(__dirname, "dist")));
 
@@ -183,7 +121,7 @@ async function start() {
       res.sendFile(path.join(__dirname, "dist", "index.html"));
     });
 
-    // ✅ Start server (Render compatible)
+    // Start server (Render compatible)
     app.listen(port, "0.0.0.0", () => {
       console.log(`Server running on port ${port}`);
     });
